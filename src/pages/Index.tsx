@@ -2,6 +2,7 @@ import { useState } from "react";
 import { RecordingButton } from "@/components/RecordingButton";
 import { TranscriptionDisplay } from "@/components/TranscriptionDisplay";
 import { SessionManager } from "@/components/SessionManager";
+import { MicrophoneSelector } from "@/components/MicrophoneSelector";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useToast } from "@/hooks/use-toast";
 
@@ -12,10 +13,13 @@ const Index = () => {
     isListening, 
     isSupported,
     hasPermission,
+    availableDevices,
+    selectedDeviceId,
     startListening, 
     stopListening, 
     resetTranscript,
-    requestPermissions
+    requestPermissions,
+    selectMicrophone
   } = useSpeechRecognition();
   const { toast } = useToast();
 
@@ -92,19 +96,13 @@ const Index = () => {
           {/* Recording Control */}
           <div className="lg:col-span-1 flex flex-col items-center justify-start">
             <div className="sticky top-8 w-full max-w-sm space-y-6">
-              {!hasPermission && (
-                <div className="p-4 bg-card border border-border rounded-lg text-center">
-                  <p className="text-sm text-foreground-secondary mb-3">
-                    Microphone access is required for speech recognition
-                  </p>
-                  <button
-                    onClick={requestPermissions}
-                    className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm hover:bg-primary/90 transition-colors"
-                  >
-                    Grant Access
-                  </button>
-                </div>
-              )}
+              <MicrophoneSelector
+                availableDevices={availableDevices}
+                selectedDeviceId={selectedDeviceId}
+                hasPermission={hasPermission}
+                onSelectDevice={selectMicrophone}
+                onRequestPermissions={requestPermissions}
+              />
               
               <div className="flex justify-center animate-scale-in">
                 <RecordingButton

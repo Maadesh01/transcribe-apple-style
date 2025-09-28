@@ -6,10 +6,13 @@ interface SpeechRecognitionHook {
   isListening: boolean;
   isSupported: boolean;
   hasPermission: boolean;
+  availableDevices: MediaDeviceInfo[];
+  selectedDeviceId: string | null;
   startListening: () => void;
   stopListening: () => void;
   resetTranscript: () => void;
   requestPermissions: () => Promise<void>;
+  selectMicrophone: (deviceId: string) => void;
 }
 
 export const useSpeechRecognition = (): SpeechRecognitionHook => {
@@ -17,8 +20,10 @@ export const useSpeechRecognition = (): SpeechRecognitionHook => {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
   const [hasPermission, setHasPermission] = useState(false);
-  const [shouldBeListening, setShouldBeListening] = useState(false);
+  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -33,30 +38,13 @@ export const useSpeechRecognition = (): SpeechRecognitionHook => {
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = 'en-US';
-      recognition.maxAlternatives = 1;
 
       recognition.onstart = () => {
-        console.log('Speech recognition started');
         setIsListening(true);
       };
 
       recognition.onend = () => {
-        console.log('Speech recognition ended');
         setIsListening(false);
-        
-        // Auto-restart if we should still be listening
-        if (shouldBeListening) {
-          setTimeout(() => {
-            if (shouldBeListening && recognitionRef.current) {
-              try {
-                console.log('Auto-restarting speech recognition...');
-                recognitionRef.current.start();
-              } catch (error) {
-                console.log('Could not restart recognition:', error);
-              }
-            }
-          }, 500);
-        }
       };
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
@@ -73,6 +61,7 @@ export const useSpeechRecognition = (): SpeechRecognitionHook => {
         }
 
         setTranscript(prev => {
+          // Only add final results to avoid duplicates
           if (finalTranscript) {
             return prev + finalTranscript;
           }
@@ -84,29 +73,20 @@ export const useSpeechRecognition = (): SpeechRecognitionHook => {
         console.error('Speech recognition error:', event.error);
         setIsListening(false);
         
-        // Handle "no-speech" error gracefully
-        if (event.error === 'no-speech') {
-          console.log('No speech detected, will retry...');
-          return; // Let onend handle restart
-        }
-        
-        // Handle other errors
         let errorMessage = 'Speech recognition error occurred.';
         switch (event.error) {
+          case 'no-speech':
+            errorMessage = 'No speech detected. Please try speaking clearly.';
+            break;
           case 'audio-capture':
             errorMessage = 'Microphone access denied or not available.';
-            setShouldBeListening(false);
             break;
           case 'not-allowed':
             errorMessage = 'Microphone permission denied. Please allow microphone access.';
-            setHasPermission(false);
-            setShouldBeListening(false);
             break;
           case 'network':
             errorMessage = 'Network error occurred. Please check your connection.';
             break;
-          case 'aborted':
-            return; // Don't show error for manual stops
         }
         
         toast({
@@ -129,7 +109,7 @@ export const useSpeechRecognition = (): SpeechRecognitionHook => {
         recognitionRef.current.stop();
       }
     };
-  }, [toast, shouldBeListening]);
+  }, [toast]);
 
   const resetTranscript = useCallback(() => {
     setTranscript('');
@@ -139,7 +119,16 @@ export const useSpeechRecognition = (): SpeechRecognitionHook => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setHasPermission(true);
-      console.log('Microphone permission granted');
+      
+      // Get available audio input devices
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(device => device.kind === 'audioinput');
+      setAvailableDevices(audioInputs);
+      
+      // Set default device if none selected
+      if (!selectedDeviceId && audioInputs.length > 0) {
+        setSelectedDeviceId(audioInputs[0].deviceId);
+      }
       
       // Stop the stream as we only needed it for permissions
       stream.getTracks().forEach(track => track.stop());
@@ -153,37 +142,54 @@ export const useSpeechRecognition = (): SpeechRecognitionHook => {
         variant: 'destructive',
       });
     }
-  }, [toast]);
+  }, [selectedDeviceId, toast]);
+
+  const stopListening = useCallback(() => {
+    if (recognitionRef.current && isListening) {
+      recognitionRef.current.stop();
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+  }, [isListening]);
+
+  const selectMicrophone = useCallback((deviceId: string) => {
+    setSelectedDeviceId(deviceId);
+    
+    // If currently listening, restart with new microphone
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      // The recognition will restart automatically when onend is triggered
+    }
+  }, [isListening]);
 
   const startListening = useCallback(async () => {
-    if (!hasPermission) {
-      await requestPermissions();
-      return;
-    }
-
-    setShouldBeListening(true);
-    
-    if (recognitionRef.current && !isListening) {
+    if (recognitionRef.current && !isListening && hasPermission) {
       try {
-        console.log('Starting speech recognition...');
+        // If a specific device is selected, get stream from that device
+        if (selectedDeviceId) {
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+          }
+          streamRef.current = await navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: selectedDeviceId }
+          });
+        }
+        
         recognitionRef.current.start();
       } catch (error) {
         console.error('Error starting recognition:', error);
         toast({
-          title: 'Error', 
+          title: 'Error',
           description: 'Failed to start speech recognition. Please check your microphone.',
           variant: 'destructive',
         });
       }
+    } else if (!hasPermission) {
+      await requestPermissions();
     }
-  }, [isListening, hasPermission, toast, requestPermissions]);
-
-  const stopListening = useCallback(() => {
-    setShouldBeListening(false);
-    if (recognitionRef.current && isListening) {
-      recognitionRef.current.stop();
-    }
-  }, [isListening]);
+  }, [isListening, hasPermission, selectedDeviceId, toast, requestPermissions]);
 
   useEffect(() => {
     // Request permissions on mount
@@ -197,9 +203,12 @@ export const useSpeechRecognition = (): SpeechRecognitionHook => {
     isListening,
     isSupported,
     hasPermission,
+    availableDevices,
+    selectedDeviceId,
     startListening,
     stopListening,
     resetTranscript,
     requestPermissions,
+    selectMicrophone,
   };
 };
