@@ -2,6 +2,7 @@ import { useState } from "react";
 import { RecordingButton } from "@/components/RecordingButton";
 import { TranscriptionDisplay } from "@/components/TranscriptionDisplay";
 import { SessionManager } from "@/components/SessionManager";
+import { MicrophoneSelector } from "@/components/MicrophoneSelector";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useToast } from "@/hooks/use-toast";
 
@@ -10,10 +11,15 @@ const Index = () => {
   const { 
     transcript, 
     isListening, 
-    isSupported, 
+    isSupported,
+    hasPermission,
+    availableDevices,
+    selectedDeviceId,
     startListening, 
     stopListening, 
-    resetTranscript 
+    resetTranscript,
+    requestPermissions,
+    selectMicrophone
   } = useSpeechRecognition();
   const { toast } = useToast();
 
@@ -22,6 +28,15 @@ const Index = () => {
       toast({
         title: "Not Supported",
         description: "Speech recognition is not supported in this browser.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    if (!hasPermission) {
+      toast({
+        title: "Permission Required",
+        description: "Please grant microphone access to start recording.",
         variant: "destructive"
       });
       return;
@@ -81,12 +96,20 @@ const Index = () => {
           {/* Recording Control */}
           <div className="lg:col-span-1 flex flex-col items-center justify-start">
             <div className="sticky top-8 w-full max-w-sm space-y-6">
+              <MicrophoneSelector
+                availableDevices={availableDevices}
+                selectedDeviceId={selectedDeviceId}
+                hasPermission={hasPermission}
+                onSelectDevice={selectMicrophone}
+                onRequestPermissions={requestPermissions}
+              />
+              
               <div className="flex justify-center animate-scale-in">
                 <RecordingButton
                   isRecording={isRecording}
                   isListening={isListening}
                   onToggleRecording={handleToggleRecording}
-                  disabled={!isSupported}
+                  disabled={!isSupported || !hasPermission}
                 />
               </div>
               

@@ -5,16 +5,25 @@ interface SpeechRecognitionHook {
   transcript: string;
   isListening: boolean;
   isSupported: boolean;
+  hasPermission: boolean;
+  availableDevices: MediaDeviceInfo[];
+  selectedDeviceId: string | null;
   startListening: () => void;
   stopListening: () => void;
   resetTranscript: () => void;
+  requestPermissions: () => Promise<void>;
+  selectMicrophone: (deviceId: string) => void;
 }
 
 export const useSpeechRecognition = (): SpeechRecognitionHook => {
   const [transcript, setTranscript] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
+  const [hasPermission, setHasPermission] = useState(false);
+  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -102,37 +111,104 @@ export const useSpeechRecognition = (): SpeechRecognitionHook => {
     };
   }, [toast]);
 
-  const startListening = useCallback(() => {
-    if (recognitionRef.current && !isListening) {
-      try {
-        recognitionRef.current.start();
-      } catch (error) {
-        console.error('Error starting recognition:', error);
-        toast({
-          title: 'Error',
-          description: 'Failed to start speech recognition. Please try again.',
-          variant: 'destructive',
-        });
+  const resetTranscript = useCallback(() => {
+    setTranscript('');
+  }, []);
+
+  const requestPermissions = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setHasPermission(true);
+      
+      // Get available audio input devices
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(device => device.kind === 'audioinput');
+      setAvailableDevices(audioInputs);
+      
+      // Set default device if none selected
+      if (!selectedDeviceId && audioInputs.length > 0) {
+        setSelectedDeviceId(audioInputs[0].deviceId);
       }
+      
+      // Stop the stream as we only needed it for permissions
+      stream.getTracks().forEach(track => track.stop());
+      
+    } catch (error) {
+      console.error('Error requesting microphone permission:', error);
+      setHasPermission(false);
+      toast({
+        title: 'Permission Denied',
+        description: 'Microphone access is required for speech recognition.',
+        variant: 'destructive',
+      });
     }
-  }, [isListening, toast]);
+  }, [selectedDeviceId, toast]);
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current && isListening) {
       recognitionRef.current.stop();
     }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
   }, [isListening]);
 
-  const resetTranscript = useCallback(() => {
-    setTranscript('');
-  }, []);
+  const selectMicrophone = useCallback((deviceId: string) => {
+    setSelectedDeviceId(deviceId);
+    
+    // If currently listening, restart with new microphone
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      // The recognition will restart automatically when onend is triggered
+    }
+  }, [isListening]);
+
+  const startListening = useCallback(async () => {
+    if (recognitionRef.current && !isListening && hasPermission) {
+      try {
+        // If a specific device is selected, get stream from that device
+        if (selectedDeviceId) {
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+          }
+          streamRef.current = await navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: selectedDeviceId }
+          });
+        }
+        
+        recognitionRef.current.start();
+      } catch (error) {
+        console.error('Error starting recognition:', error);
+        toast({
+          title: 'Error',
+          description: 'Failed to start speech recognition. Please check your microphone.',
+          variant: 'destructive',
+        });
+      }
+    } else if (!hasPermission) {
+      await requestPermissions();
+    }
+  }, [isListening, hasPermission, selectedDeviceId, toast, requestPermissions]);
+
+  useEffect(() => {
+    // Request permissions on mount
+    if (isSupported) {
+      requestPermissions();
+    }
+  }, [isSupported, requestPermissions]);
 
   return {
     transcript,
     isListening,
     isSupported,
+    hasPermission,
+    availableDevices,
+    selectedDeviceId,
     startListening,
     stopListening,
     resetTranscript,
+    requestPermissions,
+    selectMicrophone,
   };
 };
